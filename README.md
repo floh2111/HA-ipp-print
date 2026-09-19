@@ -19,7 +19,7 @@ instructions below are in German; UI strings are available in German and English
 |---|---|
 | **Webhook** | Nimmt PDF- und JPEG-Dateien entgegen und druckt sie. Standard: **Schwarzweiß, einseitig, 1 Kopie**. Farbe, beidseitig und Kopien (1–20) per Angabe in der Adresse. |
 | **Sensor** „Zustand“ | Bereit / Druckt / Gestoppt (alle 5 Minuten abgefragt). |
-| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten, Seitenzahl, Auftragsnummer. |
+| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten (beidseitig oder nicht), Seitenzahl, Auftragsnummer. |
 | **Ereignis** `ipp_print_job` | Nach jedem Druck – z. B. um dem anderen eine Nachricht zu schicken („Anna hat 3 Seiten gedruckt“). |
 
 Was gedruckt werden kann: **PDF** und **JPEG** (auch TIFF und PostScript). Alles andere (Word, Pages, Fotos im
