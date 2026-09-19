@@ -72,12 +72,12 @@ Aktionen, in dieser Reihenfolge:
    | Schwarzweiß, einseitig (Standard) | `color=bw&sides=one&copies=1` |
    | Farbe | `color=color&sides=one&copies=1` |
    | Beidseitig | `color=bw&sides=two&copies=1` |
-   | Mehr … | erst **Nach Eingabe fragen** (Zahl, Standard 1, „Kopien“) und ein Menü „Farbe?“/„Beidseitig?“, dann Text `color=…&sides=…&copies=` + die Zahl |
+   | Mehr … | erst **Nach Eingabe fragen** (Zahl, Standard 1, „Kopien“) und ein Menü „Farbe?“/„Beidseitig?“, dann Text `color=bw&sides=one&copies=` mit der Variablen der Zahl direkt dahinter (ohne Pluszeichen) |
 
-2. **PDF erstellen** – aus der **Kurzbefehl-Eingabe**. (Ist die Eingabe schon ein PDF, bleibt es eins; Fotos, Pages,
+2. **PDF erstellen** – aus der **Kurzbefehl-Eingabe** (nicht aus dem „Menüergebnis“, das ist nur der Optionstext). (Ist die Eingabe schon ein PDF, bleibt es eins; Fotos, Pages,
    Word und Webseiten werden umgewandelt.)
 3. **Inhalt von URL abrufen**:
-   - URL: `https://<deine-ha-adresse>/api/webhook/<geheimnis>?name=Florian&` + die Variable `Optionen`
+   - URL: `https://<deine-ha-adresse>/api/webhook/<geheimnis>?name=Florian&` und **direkt dahinter** (ohne Leerzeichen und **ohne Pluszeichen**) die Variable `Optionen`. Sonst wird die Farbe nicht erkannt und immer Schwarzweiß gedruckt.
    - Methode **POST**, Header `Content-Type` = `application/pdf`
    - Anfragetext: **Datei** → das Ergebnis von *PDF erstellen*
 4. **Wert für „message“ im Wörterbuch abrufen** (aus dem Ergebnis) → **Mitteilung anzeigen**. So siehst du „Gedruckt: …
