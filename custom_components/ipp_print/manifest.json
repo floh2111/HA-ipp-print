@@ -1,0 +1,13 @@
+{
+  "domain": "ipp_print",
+  "name": "IPP Print",
+  "codeowners": ["@floh2111"],
+  "config_flow": true,
+  "dependencies": ["webhook"],
+  "documentation": "https://github.com/floh2111/HA-ipp-print",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/floh2111/HA-ipp-print/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

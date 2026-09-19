@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect printer",
+        "description": "Enter the address of your network printer, preferably its **IP address** (e.g. 192.168.1.20 – names ending in \".local\" often do not resolve in Home Assistant). Give the printer a fixed address in your router. The printer must support IPP (most network printers do).",
+        "data": {
+          "printer_url": "Printer address"
+        },
+        "data_description": {
+          "printer_url": "IP address or ipp://… address, e.g. ipp://192.168.1.20:631/ipp/print"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The printer does not respond. Check the address and that it is switched on and on the same network.",
+      "invalid_url": "Invalid address.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This printer is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Webhook address for printing",
+        "description": "Enter this address in the shortcut – **keep it secret**, anyone with the address can print:\n\n`{url}`\n\nPrinter: {printer}",
+        "data": {
+          "regenerate": "Generate a new address (the old one stops working)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "printer_state": {
+        "name": "State",
+        "state": {
+          "idle": "Ready",
+          "processing": "Printing",
+          "stopped": "Stopped"
+        }
+      },
+      "last_job": {
+        "name": "Last print"
+      }
+    }
+  }
+}

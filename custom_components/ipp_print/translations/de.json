@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Drucker verbinden",
+        "description": "Trage die Adresse deines Netzwerkdruckers ein, am besten die **IP-Adresse** (z. B. 192.168.1.20 – ein Name mit „.local“ wird in Home Assistant oft nicht aufgelöst). Gib dem Drucker im Router am besten eine feste Adresse. Der Drucker muss IPP unterstützen (die meisten Netzwerkdrucker tun das).",
+        "data": {
+          "printer_url": "Drucker-Adresse"
+        },
+        "data_description": {
+          "printer_url": "IP-Adresse oder ipp://…-Adresse, z. B. ipp://192.168.1.20:631/ipp/print"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Der Drucker antwortet nicht. Adresse prüfen und ob er eingeschaltet und im selben Netz ist.",
+      "invalid_url": "Ungültige Adresse.",
+      "unknown": "Unerwarteter Fehler."
+    },
+    "abort": {
+      "already_configured": "Dieser Drucker ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Webhook-Adresse zum Drucken",
+        "description": "Diese Adresse trägst du in den Kurzbefehl ein – **halte sie geheim**, jeder mit der Adresse kann drucken:\n\n`{url}`\n\nDrucker: {printer}",
+        "data": {
+          "regenerate": "Neue Adresse erzeugen (die alte wird ungültig)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "printer_state": {
+        "name": "Zustand",
+        "state": {
+          "idle": "Bereit",
+          "processing": "Druckt",
+          "stopped": "Gestoppt"
+        }
+      },
+      "last_job": {
+        "name": "Letzter Druck"
+      }
+    }
+  }
+}
