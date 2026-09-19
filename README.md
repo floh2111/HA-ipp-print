@@ -76,13 +76,11 @@ Aktionen, in dieser Reihenfolge:
 
 2. **PDF erstellen** – aus der **Kurzbefehl-Eingabe**. (Ist die Eingabe schon ein PDF, bleibt es eins; Fotos, Pages,
    Word und Webseiten werden umgewandelt.)
-3. **Text** mit dem Namen der Datei und **URL-codieren** darauf (damit Umlaute und Leerzeichen keine Probleme
-   machen) → Variable `Dateiname`.
-4. **Inhalt von URL abrufen**:
-   - URL: `https://<deine-ha-adresse>/api/webhook/<geheimnis>?name=Florian&filename=` + `Dateiname` + `&` + `Optionen`
+3. **Inhalt von URL abrufen**:
+   - URL: `https://<deine-ha-adresse>/api/webhook/<geheimnis>?name=Florian&` + die Variable `Optionen`
    - Methode **POST**, Header `Content-Type` = `application/pdf`
    - Anfragetext: **Datei** → das Ergebnis von *PDF erstellen*
-5. **Wert für „message“ im Wörterbuch abrufen** (aus dem Ergebnis) → **Mitteilung anzeigen**. So siehst du „Gedruckt: …
+4. **Wert für „message“ im Wörterbuch abrufen** (aus dem Ergebnis) → **Mitteilung anzeigen**. So siehst du „Gedruckt: …
    (2 Seiten, Schwarzweiß, einseitig)“ oder eine verständliche Fehlermeldung („Der Drucker ist nicht erreichbar …“).
 
 Beim ersten Ausführen fragt iOS, ob der Kurzbefehl Daten an die Domain senden darf – **Immer erlauben**.
