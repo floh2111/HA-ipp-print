@@ -174,7 +174,8 @@ async def test_event_and_last_job_sensor(
     await hass.async_block_till_done()
     [event] = events
     assert event.data == {
-        "name": "Anna", "filename": "Foto.jpg", "copies": 2, "color": True, "sides": "einseitig", "pages": None, "job_id": 42,
+        "name": "Anna", "filename": "Foto.jpg", "copies": 2, "color": True, "sides": "einseitig", "pages": None,
+        "page_range": None, "job_id": 42,
     }
     state = hass.states.get(last_id)
     assert state.state != "unknown"
@@ -200,3 +201,92 @@ async def test_get_checks_printer(
     printer.down = True
     assert (await client.get(URL)).status == 504
     assert printer.prints == []  # GET druckt nie
+
+
+# --- Seitenbereich -------------------------------------------------------------------------------
+async def test_no_page_range_by_default(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    client = await hass_client_no_auth()
+    await client.post(URL, data=PDF)
+    assert "page-ranges" not in printer.prints[-1]["job"]  # alle Seiten
+    await client.post(f"{URL}?pages=", data=PDF)  # leere Angabe (Kurzbefehl ohne Eingabe) = ebenfalls alle
+    assert "page-ranges" not in printer.prints[-1]["job"]
+
+
+@pytest.mark.parametrize(
+    ("pages", "sent", "shown"),
+    [
+        ("2-3", [(2, 3)], "Seiten 2-3"),
+        ("1-3,5", [(1, 3), (5, 5)], "Seiten 1-3, 5"),
+        ("5,1-3", [(1, 3), (5, 5)], "Seiten 1-3, 5"),
+        ("1-3,2-5", [(1, 5)], "Seiten 1-5"),
+        ("4", [(4, 4)], "Seiten 4"),
+    ],
+)
+async def test_page_range_is_sent_to_printer(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth,
+    pages: str, sent: list, shown: str,
+) -> None:
+    client = await hass_client_no_auth()
+    resp = await client.post(URL, params={"pages": pages}, data=PDF)
+    body = await resp.json()
+    assert resp.status == 200, body
+    assert printer.prints[-1]["job"]["page-ranges"] == sent
+    assert shown in body["message"]
+    assert "2 Seiten" not in body["message"]  # statt der Gesamtseitenzahl steht der gewählte Bereich
+
+
+async def test_page_range_combines_with_other_options(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    client = await hass_client_no_auth()
+    resp = await client.post(f"{URL}?pages=2-3&color=color&sides=two&copies=2", data=PDF)
+    assert resp.status == 200
+    job = printer.prints[-1]["job"]
+    assert (job["page-ranges"], job["copies"], job["sides"], job["print-color-mode"]) == (
+        [(2, 3)], [2], ["two-sided-long-edge"], ["color"],
+    )
+    assert "Seiten 2-3, Farbe, beidseitig, 2×" in (await resp.json())["message"]
+
+
+@pytest.mark.parametrize("pages", ["0", "3-1", "abc", "1-", "1;3", "1,3,5,7,9,11,13,15,17,19,21"])
+async def test_invalid_page_range_is_rejected_before_printing(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth, pages: str
+) -> None:
+    client = await hass_client_no_auth()
+    resp = await client.post(URL, params={"pages": pages}, data=PDF)
+    assert resp.status == 400 and "1-3,5" in (await resp.json())["message"]
+    assert printer.prints == []
+
+
+async def test_page_range_only_for_pdf(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    client = await hass_client_no_auth()
+    resp = await client.post(f"{URL}?pages=1-2", data=JPEG)
+    assert resp.status == 400 and "PDF" in (await resp.json())["message"]
+    assert printer.prints == []
+
+
+async def test_page_range_in_event_and_sensor(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    from homeassistant.helpers import entity_registry as er
+
+    client = await hass_client_no_auth()
+    events = async_capture_events(hass, EVENT_PRINT_JOB)
+    await client.post(f"{URL}?name=Anna&pages=2-3,7", data=PDF)
+    await hass.async_block_till_done()
+    assert events[0].data["page_range"] == "2-3, 7"
+    last_id = er.async_get(hass).async_get_entity_id("sensor", "ipp_print", f"{setup_integration.entry_id}_last_job")
+    assert hass.states.get(last_id).attributes["page_range"] == "2-3, 7"
+
+
+async def test_typographic_dash_from_ios_is_understood(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    client = await hass_client_no_auth()
+    resp = await client.post(URL, params={"pages": "1\u20133"}, data=PDF)
+    assert resp.status == 200
+    assert printer.prints[-1]["job"]["page-ranges"] == [(1, 3)]

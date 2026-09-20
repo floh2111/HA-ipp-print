@@ -35,6 +35,7 @@ URI = 0x45
 CHARSET = 0x47
 LANGUAGE = 0x48
 MIME = 0x49
+RANGE = 0x33  # rangeOfInteger: (untere, obere Grenze), je 4 Byte
 
 _INT_TAGS = (INTEGER, ENUM)
 _TEXT_TAGS = (0x41, 0x42, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49)  # text/name/keyword/uri/uriScheme/charset/language/mime
@@ -85,6 +86,7 @@ class PrintJob:
     copies: int = 1
     color: bool = False
     duplex: bool | str = False  # False = einseitig, True/"long" = lange Kante, "short" = kurze Kante
+    page_ranges: list[tuple[int, int]] | None = None  # nur diese Seiten drucken (PDF), z. B. [(1, 3), (5, 5)]
 
 
 # --- Kodierung -----------------------------------------------------------------------------------
@@ -94,7 +96,10 @@ def _clean_text(value: str, limit: int = 255) -> str:
 
 
 def encode_attribute(tag: int, name: str, value: Any) -> bytes:
-    """Ein Attribut; eine Liste als Wert ergibt ein Attribut mit mehreren Werten (1setOf)."""
+    """Ein Attribut; eine Liste als Wert ergibt ein Attribut mit mehreren Werten (1setOf).
+
+    Bei RANGE ist der Wert immer eine Liste von (untere, obere)-Paaren, auch für nur einen Bereich.
+    """
     values = value if isinstance(value, (list, tuple)) else [value]
     out = bytearray()
     for index, item in enumerate(values):
@@ -102,6 +107,8 @@ def encode_attribute(tag: int, name: str, value: Any) -> bytes:
             raw = struct.pack(">i", int(item))
         elif tag == BOOLEAN:
             raw = b"\x01" if item else b"\x00"
+        elif tag == RANGE:
+            raw = struct.pack(">ii", int(item[0]), int(item[1]))
         else:
             raw = str(item).encode("utf-8")
         attr_name = name.encode("ascii") if index == 0 else b""
@@ -162,6 +169,8 @@ def parse_response(data: bytes) -> IppResponse:
                 value: Any = struct.unpack(">i", raw)[0]
             elif tag == BOOLEAN and value_len == 1:
                 value = raw != b"\x00"
+            elif tag == RANGE and value_len == 8:
+                value = struct.unpack(">ii", raw)
             elif tag in _TEXT_TAGS:
                 value = raw.decode("utf-8", "replace")
             else:
@@ -197,6 +206,47 @@ _PDF_PAGE = re.compile(rb"/Type\s*/Page(?![A-Za-z])")
 def count_pdf_pages(data: bytes) -> int | None:
     """Seitenzahl eines PDFs, soweit sie sich ohne PDF-Bibliothek erkennen lässt (sonst None)."""
     return len(_PDF_PAGE.findall(data)) or None
+
+
+MAX_PAGE_RANGES = 10
+
+
+def parse_page_ranges(text: str) -> list[tuple[int, int]]:
+    """'1-3, 5' -> [(1, 3), (5, 5)]. Sortiert und fasst Überlappendes zusammen (IPP verlangt aufsteigend ohne Überlappung).
+
+    Verträgt Leerzeichen und typografische Striche (– —), die iOS gern statt "-" einsetzt.
+    Wirft ValueError bei allem, was keine Seitenangabe ist.
+    """
+    cleaned = re.sub(r"[\u2010-\u2015\u2212]", "-", text or "")
+    cleaned = re.sub(r"\s+", "", cleaned)
+    ranges: list[tuple[int, int]] = []
+    for part in cleaned.split(","):
+        if not part:  # z. B. ein Komma am Ende
+            continue
+        match = re.fullmatch(r"(\d{1,4})(?:-(\d{1,4}))?", part)
+        if not match:
+            raise ValueError(f"ungültig: {part!r}")
+        lower = int(match.group(1))
+        upper = int(match.group(2)) if match.group(2) else lower
+        if lower < 1 or upper < lower:
+            raise ValueError(f"ungültiger Bereich: {part!r}")
+        ranges.append((lower, upper))
+    if not ranges or len(ranges) > MAX_PAGE_RANGES:
+        raise ValueError("keine oder zu viele Bereiche")
+    ranges.sort()
+    merged = [ranges[0]]
+    for lower, upper in ranges[1:]:
+        last_lower, last_upper = merged[-1]
+        if lower <= last_upper + 1:
+            merged[-1] = (last_lower, max(last_upper, upper))
+        else:
+            merged.append((lower, upper))
+    return merged
+
+
+def format_page_ranges(ranges: list[tuple[int, int]]) -> str:
+    """[(1, 3), (5, 5)] -> '1-3, 5'."""
+    return ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in ranges)
 
 
 def normalize_printer_url(raw: str) -> str:
@@ -260,11 +310,14 @@ class IppPrinter:
         sides = "one-sided"
         if job.duplex:
             sides = "two-sided-short-edge" if job.duplex == "short" else "two-sided-long-edge"
-        return [
+        attrs: list[tuple[int, str, Any]] = [
             (INTEGER, "copies", job.copies),
             (KEYWORD, "sides", sides),
             (KEYWORD, "print-color-mode", "color" if job.color else "monochrome"),
         ]
+        if job.page_ranges:
+            attrs.append((RANGE, "page-ranges", job.page_ranges))
+        return attrs
 
     def _job_operation_attributes(self, job: PrintJob) -> list[tuple[int, str, Any]]:
         return [

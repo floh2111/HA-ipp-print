@@ -127,3 +127,49 @@ def test_brand_icons_exist() -> None:
 
     brand = Path(ipp.__file__).parent / "brand"
     assert (brand / "icon.png").is_file() and (brand / "icon@2x.png").is_file()
+
+
+# --- Seitenbereich -------------------------------------------------------------------------------
+def test_encode_range_attribute_golden_bytes() -> None:
+    # rangeOfInteger: Tag 0x33, je Bereich 2 x 4 Byte; weitere Bereiche als zusätzliche Werte (leerer Name)
+    assert ipp.encode_attribute(ipp.RANGE, "page-ranges", [(1, 3), (5, 5)]) == (
+        b"\x33\x00\x0bpage-ranges\x00\x08\x00\x00\x00\x01\x00\x00\x00\x03"
+        b"\x33\x00\x00\x00\x08\x00\x00\x00\x05\x00\x00\x00\x05"
+    )
+
+
+def test_range_attribute_roundtrip() -> None:
+    raw = b"\x02\x00\x00\x00\x00\x00\x00\x01\x02" + ipp.encode_attribute(ipp.RANGE, "page-ranges", [(2, 3), (9, 12)]) + b"\x03"
+    assert ipp.parse_response(raw).attributes(ipp.TAG_JOB)["page-ranges"] == [(2, 3), (9, 12)]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2-3", [(2, 3)]),
+        ("7", [(7, 7)]),
+        ("1-3,5", [(1, 3), (5, 5)]),
+        (" 1 - 3 , 5 ", [(1, 3), (5, 5)]),  # Leerzeichen
+        ("1\u20133", [(1, 3)]),  # typografischer Strich, den iOS gern einsetzt
+        ("1\u20143", [(1, 3)]),
+        ("5,1-3", [(1, 3), (5, 5)]),  # wird sortiert
+        ("1-3,2-5", [(1, 5)]),  # Überlappung wird zusammengefasst
+        ("1-3,4-6", [(1, 6)]),  # direkt aneinander ebenfalls
+        ("1,1,1", [(1, 1)]),
+        ("1-3,", [(1, 3)]),  # Komma am Ende
+    ],
+)
+def test_parse_page_ranges(text: str, expected: list[tuple[int, int]]) -> None:
+    assert ipp.parse_page_ranges(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["", "   ", ",", "0", "3-1", "abc", "1-", "-3", "1-2-3", "1.5", "1;3", "0-3", "99999", "1,3,5,7,9,11,13,15,17,19,21"]
+)
+def test_parse_page_ranges_rejects(text: str) -> None:
+    with pytest.raises(ValueError):
+        ipp.parse_page_ranges(text)
+
+
+def test_format_page_ranges() -> None:
+    assert ipp.format_page_ranges([(1, 3), (5, 5), (7, 9)]) == "1-3, 5, 7-9"

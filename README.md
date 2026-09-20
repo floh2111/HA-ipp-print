@@ -17,9 +17,9 @@ instructions below are in German; UI strings are available in German and English
 
 | Was | Beschreibung |
 |---|---|
-| **Webhook** | Nimmt PDF- und JPEG-Dateien entgegen und druckt sie. Standard: **Schwarzweiß, einseitig, 1 Kopie**. Farbe, beidseitig und Kopien (1–20) per Angabe in der Adresse. |
+| **Webhook** | Nimmt PDF- und JPEG-Dateien entgegen und druckt sie. Standard: **Schwarzweiß, einseitig, 1 Kopie**. Farbe, beidseitig, Kopien (1–20) und ein **Seitenbereich** (nur bestimmte Seiten eines PDFs) per Angabe in der Adresse. |
 | **Sensor** „Zustand“ | Bereit / Druckt / Gestoppt (alle 5 Minuten abgefragt). |
-| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten (beidseitig oder nicht), Seitenzahl, Auftragsnummer. |
+| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten (beidseitig oder nicht), Seitenzahl, Seitenbereich, Auftragsnummer. |
 | **Ereignis** `ipp_print_job` | Nach jedem Druck – z. B. um dem anderen eine Nachricht zu schicken („Anna hat 3 Seiten gedruckt“). |
 
 Was gedruckt werden kann: **PDF** und **JPEG** (auch TIFF und PostScript). Alles andere (Word, Pages, Fotos im
@@ -72,7 +72,7 @@ Aktionen, in dieser Reihenfolge:
    | Schwarzweiß, einseitig (Standard) | `color=bw&sides=one&copies=1` |
    | Farbe | `color=color&sides=one&copies=1` |
    | Beidseitig | `color=bw&sides=two&copies=1` |
-   | Mehr … | erst **Nach Eingabe fragen** (Zahl, Standard 1, „Kopien“) und ein Menü „Farbe?“/„Beidseitig?“, dann Text `color=bw&sides=one&copies=` mit der Variablen der Zahl direkt dahinter (ohne Pluszeichen) |
+   | Mehr … | zwei Aktionen **Nach Eingabe fragen**: (1) *Zahl* „Kopien“, Standard `1`; (2) *Text* „Welche Seiten? (leer = alle, z. B. 1-3,5)“. Dann Text `color=bw&sides=one&copies=` + Variable *Kopien* + `&pages=` + Variable *Seiten*, alles **direkt hintereinander**, ohne Leerzeichen und ohne Pluszeichen |
 
 2. **PDF erstellen** – aus der **Kurzbefehl-Eingabe** (nicht aus dem „Menüergebnis“, das ist nur der Optionstext). (Ist die Eingabe schon ein PDF, bleibt es eins; Fotos, Pages,
    Word und Webseiten werden umgewandelt.)
@@ -96,8 +96,13 @@ verwenden“, Methode POST, Datei als Anfragetext, dieselbe Adresse und dieselbe
 | `color` | `bw` (Schwarzweiß), `color` | `bw` |
 | `sides` | `one` (einseitig), `two` (beidseitig, lange Kante), `two-short` (kurze Kante) | `one` |
 | `copies` | 1–20 | `1` |
+| `pages` | Seitenbereich, nur bei PDF: `2-3`, `1-3,5`, `7`. Leer = alle Seiten | alle |
 | `name` | wer druckt (erscheint am Drucker/im Ereignis) | „Unbekannt“ |
 | `filename` | Name des Auftrags | „Dokument“ |
+
+**Seitenbereich:** Angaben wie `1-3,5` (Seitenzahlen ab 1). Leerzeichen und die typografischen Striche, die iOS gern
+einsetzt (–), werden verstanden; Überlappendes wird zusammengefasst (`1-3,2-5` → `1-5`). Er gilt nur für PDFs – der
+Kurzbefehl wandelt ohnehin alles in ein PDF um. Ist die Angabe ungültig, wird nicht gedruckt und die Meldung sagt es.
 
 Antwort als JSON: `{"ok": true, "message": "Gedruckt: … ", "job_id": 42, "pages": 2}`; bei Fehlern `ok: false`
 mit HTTP-Status 400 (ungültige Angabe), 413 (zu groß), 415 (Dateityp), 429 (zu viele Aufträge), 502/504 (Drucker

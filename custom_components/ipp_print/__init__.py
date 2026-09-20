@@ -36,7 +36,17 @@ from .const import (
     SIGNAL_JOB,
     STATUS_INTERVAL_SECONDS,
 )
-from .ipp import IppConnectionError, IppError, IppPrinter, IppResponseError, PrintJob, count_pdf_pages, detect_format
+from .ipp import (
+    IppConnectionError,
+    IppError,
+    IppPrinter,
+    IppResponseError,
+    PrintJob,
+    count_pdf_pages,
+    detect_format,
+    format_page_ranges,
+    parse_page_ranges,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +75,7 @@ class LastJob:
     sides: str
     pages: int | None
     job_id: int | None
+    page_range: str | None = None
 
 
 class PrintManager:
@@ -114,6 +125,12 @@ class PrintManager:
         if sides_param not in _SIDES:
             return _reply(400, False, "Seiten: one, two oder two-short.")
         duplex = _SIDES[sides_param]
+        page_ranges = None
+        if query.get("pages", "").strip():  # leer = alle Seiten (so schickt es ein Kurzbefehl, wenn nichts eingetippt wurde)
+            try:
+                page_ranges = parse_page_ranges(query["pages"])
+            except ValueError:
+                return _reply(400, False, "Seiten: bitte so angeben: 1-3,5 (Seitenzahlen ab 1).")
 
         if request.content_length is not None and request.content_length > MAX_BYTES:
             return _reply(413, False, f"Die Datei ist zu groß (maximal {MAX_BYTES // 1024 // 1024} MB).")
@@ -125,10 +142,15 @@ class PrintManager:
         mime = detect_format(data)
         if mime is None:
             return _reply(415, False, "Dateityp nicht unterstützt. Bitte als PDF oder JPEG senden.")
+        if page_ranges and mime != "application/pdf":
+            return _reply(400, False, "Einen Seitenbereich gibt es nur bei PDF-Dateien.")
         if self._rate_limited():
             return _reply(429, False, "Zu viele Druckaufträge in kurzer Zeit. Bitte später noch einmal versuchen.")
 
-        job = PrintJob(user=name, name=filename, mime=mime, copies=copies, color=color_param == "color", duplex=duplex)
+        job = PrintJob(
+            user=name, name=filename, mime=mime, copies=copies, color=color_param == "color", duplex=duplex,
+            page_ranges=page_ranges,
+        )
         async with self._lock:
             try:
                 job_id = await self.printer.print_job(job, data)
@@ -146,14 +168,25 @@ class PrintManager:
         pages = count_pdf_pages(data) if mime == "application/pdf" else None
         sides_text = _SIDES_TEXT[duplex]
         color_text = "Farbe" if job.color else "Schwarzweiß"
-        self.last = LastJob(dt_util.utcnow(), name, filename, copies, job.color, sides_text, pages, job_id)
+        range_text = format_page_ranges(page_ranges) if page_ranges else None
+        self.last = LastJob(dt_util.utcnow(), name, filename, copies, job.color, sides_text, pages, job_id, range_text)
         self.hass.bus.async_fire(
             EVENT_PRINT_JOB,
-            {"name": name, "filename": filename, "copies": copies, "color": job.color, "sides": sides_text, "pages": pages, "job_id": job_id},
+            {
+                "name": name, "filename": filename, "copies": copies, "color": job.color, "sides": sides_text,
+                "pages": pages, "page_range": range_text, "job_id": job_id,
+            },
         )
         async_dispatcher_send(self.hass, SIGNAL_JOB.format(self.entry.entry_id))
         detail = ", ".join(
-            part for part in (f"{pages} Seite{'n' if pages != 1 else ''}" if pages else "", color_text, sides_text, f"{copies}×" if copies > 1 else "") if part
+            part
+            for part in (
+                f"Seiten {range_text}" if range_text else (f"{pages} Seite{'n' if pages != 1 else ''}" if pages else ""),
+                color_text,
+                sides_text,
+                f"{copies}×" if copies > 1 else "",
+            )
+            if part
         )
         return _reply(200, True, f"Gedruckt: {filename} ({detail})", job_id=job_id, pages=pages)
 

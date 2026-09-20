@@ -98,5 +98,6 @@ class LastJobSensor(SensorEntity):
             "color": last.color,
             "sides": last.sides,
             "pages": last.pages,
+            "page_range": last.page_range,
             "job_id": last.job_id,
         }
