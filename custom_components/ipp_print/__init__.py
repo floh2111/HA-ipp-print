@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
@@ -19,16 +20,21 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ANNOUNCED,
+    CONF_NOTIFY_TARGET,
     CONF_PRINTER_URL,
     CONF_WEBHOOK_ID,
     DEFAULT_COPIES,
     DOMAIN,
     EVENT_PRINT_JOB,
+    EVENT_PRINT_JOB_RESULT,
+    JOB_POLL_INTERVAL_SECONDS,
+    JOB_POLL_MAX_ATTEMPTS,
     MAX_BYTES,
     MAX_COPIES,
     MAX_JOBS_PER_DAY,
@@ -43,6 +49,7 @@ from .ipp import (
     IppResponseError,
     PrintJob,
     count_pdf_pages,
+    describe_job_reasons,
     detect_format,
     format_page_ranges,
     parse_page_ranges,
@@ -76,6 +83,22 @@ class LastJob:
     pages: int | None
     job_id: int | None
     page_range: str | None = None
+    # Ergebnis NACH der Übergabe an den Drucker (siehe PrintManager._track_job): "submitted" bis geklärt ist, was
+    # daraus wurde, dann "waiting" (Drucker hält an, z. B. kein Papier), "done", "failed" oder "unclear" (der
+    # Drucker kennt den Auftrag nicht mehr - meist harmlos, wenn er ihn schon abgeschlossen und vergessen hat).
+    status: str = "submitted"
+    status_reason: str | None = None
+
+
+# Baustein für die Push-Benachrichtigung/Meldung je nach Ergebnis; None = dafür wird nichts gemeldet.
+def _result_message(status: str, filename: str, reason: str | None) -> str | None:
+    if status == "waiting":
+        return f"⏳ Drucker wartet ({reason or 'unbekannter Grund'}): „{filename}“"
+    if status == "done":
+        return f"✅ Gedruckt: „{filename}“" + (f" ({reason})" if reason else "")
+    if status == "failed":
+        return f"❌ Druckauftrag fehlgeschlagen: „{filename}“" + (f" – {reason}" if reason else "")
+    return None  # "submitted"/"unclear": nichts extra melden
 
 
 class PrintManager:
@@ -88,6 +111,7 @@ class PrintManager:
         self.last: LastJob | None = None
         self._lock = asyncio.Lock()  # immer nur ein Auftrag gleichzeitig zum Drucker
         self._times: deque[float] = deque()
+        self._trackers: dict[int, Callable[[], None]] = {}  # job_id -> Funktion, die die Verfolgung wieder abmeldet
 
     # --- Missbrauchsschutz ------------------------------------------------------------------
     def _rate_limited(self) -> bool:
@@ -164,6 +188,8 @@ class PrintManager:
                 _LOGGER.warning("Unerwartete Druckerantwort: %s", err)
                 return _reply(502, False, "Unerwartete Antwort vom Drucker.")
         self._times.append(time.monotonic())
+        if job_id is not None:
+            self._track_job(job_id)
 
         pages = count_pdf_pages(data) if mime == "application/pdf" else None
         sides_text = _SIDES_TEXT[duplex]
@@ -189,6 +215,102 @@ class PrintManager:
             if part
         )
         return _reply(200, True, f"Gedruckt: {filename} ({detail})", job_id=job_id, pages=pages)
+
+    # --- Verfolgung eines Auftrags NACH der Übergabe --------------------------------------------------
+    # Der Drucker hat den Auftrag zwar angenommen (Print-Job war erfolgreich), das heißt aber noch nicht, dass er
+    # auch fertig gedruckt wird - er kann z. B. wegen fehlenden Papiers anhalten. Hier wird per Get-Job-Attributes
+    # regelmäßig nachgefragt, bis ein Endergebnis feststeht oder wir nach JOB_POLL_MAX_ATTEMPTS Versuchen aufgeben
+    # (als Anzahl statt als Uhrzeit gezählt, damit es unabhängig von der Systemuhr sauber funktioniert).
+    def _track_job(self, job_id: int) -> None:
+        self._stop_tracking(job_id)  # zur Sicherheit: falls für dieselbe Nummer noch eine alte Verfolgung offen ist
+        attempts_left = JOB_POLL_MAX_ATTEMPTS
+        last_reasons: list[str] | None = None
+
+        async def _poll(_now: Any) -> None:
+            nonlocal attempts_left, last_reasons
+            attempts_left -= 1
+            info: dict[str, Any] | None
+            try:
+                info = await self.printer.get_job_attributes(job_id)
+            except IppResponseError as err:
+                if 0x0400 <= err.status < 0x0500:  # Drucker kennt den Auftrag nicht (mehr) - meist: schon fertig
+                    self._stop_tracking(job_id)
+                    self._report(job_id, "unclear", None)
+                    return
+                _LOGGER.debug("Auftragsstatus (Job %s) abgelehnt: %s", job_id, err)
+                info = None
+            except IppError as err:
+                _LOGGER.debug("Auftragsstatus (Job %s) gerade nicht abrufbar: %s", job_id, err)
+                info = None  # z. B. Drucker kurz nicht erreichbar - beim nächsten Mal erneut versuchen
+
+            if info is not None:
+                state, reasons = info["state"], info["reasons"]
+                if state in ("aborted", "canceled"):
+                    self._stop_tracking(job_id)
+                    self._report(job_id, "failed", describe_job_reasons(reasons) or "Unbekannter Fehler")
+                    return
+                if state == "completed":
+                    self._stop_tracking(job_id)
+                    self._report(job_id, "done", describe_job_reasons(reasons))
+                    return
+                if state == "processing-stopped" and reasons != last_reasons:
+                    last_reasons = reasons
+                    self._report(job_id, "waiting", describe_job_reasons(reasons) or "Angehalten")
+
+            if attempts_left <= 0:  # niemand hat z. B. das fehlende Papier nachgelegt - irgendwann aufgeben
+                self._stop_tracking(job_id)
+                self._report(job_id, "unclear", None)
+
+        self._trackers[job_id] = async_track_time_interval(self.hass, _poll, timedelta(seconds=JOB_POLL_INTERVAL_SECONDS))
+
+    def _stop_tracking(self, job_id: int) -> None:
+        remove = self._trackers.pop(job_id, None)
+        if remove:
+            remove()
+
+    def _report(self, job_id: int, status: str, reason: str | None) -> None:
+        """Zwischen-/Endergebnis: Sensor aktualisieren, Ereignis feuern, ggf. benachrichtigen."""
+        if self.last is not None and self.last.job_id == job_id:
+            self.last.status = status
+            self.last.status_reason = reason
+            async_dispatcher_send(self.hass, SIGNAL_JOB.format(self.entry.entry_id))
+        last = self.last if (self.last and self.last.job_id == job_id) else None
+        self.hass.bus.async_fire(
+            EVENT_PRINT_JOB_RESULT,
+            {
+                "job_id": job_id, "status": status, "reason": reason,
+                "name": last.name if last else None, "filename": last.filename if last else None,
+            },
+        )
+        self.hass.async_create_task(self._notify(job_id, status, reason, last.filename if last else "Dokument"))
+
+    async def _notify(self, job_id: int, status: str, reason: str | None, filename: str) -> None:
+        message = _result_message(status, filename, reason)
+        target = self.entry.options.get(CONF_NOTIFY_TARGET)
+        notification_id = f"{DOMAIN}_{self.entry.entry_id}_job_{job_id}"
+        if target:
+            if message is None:
+                return
+            try:
+                await self.hass.services.async_call(
+                    "notify", "send_message", {"entity_id": target, "message": message, "title": "🖨️ IPP Print"},
+                    blocking=False,
+                )
+            except Exception as err:  # noqa: BLE001 - Zielgerät ungültig/entfernt o. Ä.; darf den Rest nicht stören
+                _LOGGER.warning("Push-Benachrichtigung an %s fehlgeschlagen: %s", target, err)
+            return
+        # Ohne konfiguriertes Ziel: nur bei einem Problem eine (sich selbst ersetzende) Meldung in Home Assistant -
+        # ist es am Ende doch gut gegangen, wird eine zwischenzeitliche "wartet"-Meldung wieder weggeräumt.
+        if status in ("waiting", "failed") and message:
+            persistent_notification.async_create(self.hass, message, title="🖨️ IPP Print", notification_id=notification_id)
+        elif status in ("done", "unclear"):
+            persistent_notification.async_dismiss(self.hass, notification_id)
+
+    def shutdown(self) -> None:
+        """Wird beim Entladen der Integration aufgerufen: alle laufenden Verfolgungen beenden."""
+        for remove in list(self._trackers.values()):
+            remove()
+        self._trackers.clear()
 
 
 class StatusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -246,4 +368,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: IppPrintConfigEntry) -> 
 
 async def async_unload_entry(hass: HomeAssistant, entry: IppPrintConfigEntry) -> bool:
     webhook.async_unregister(hass, entry.runtime_data.webhook_id)
+    entry.runtime_data.manager.shutdown()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

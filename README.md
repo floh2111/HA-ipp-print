@@ -19,8 +19,11 @@ instructions below are in German; UI strings are available in German and English
 |---|---|
 | **Webhook** | Nimmt PDF- und JPEG-Dateien entgegen und druckt sie. Standard: **Schwarzweiß, einseitig, 1 Kopie**. Farbe, beidseitig, Kopien (1–20) und ein **Seitenbereich** (nur bestimmte Seiten eines PDFs) per Angabe in der Adresse. |
 | **Sensor** „Zustand“ | Bereit / Druckt / Gestoppt (alle 5 Minuten abgefragt). |
-| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten (beidseitig oder nicht), Seitenzahl, Seitenbereich, Auftragsnummer. |
-| **Ereignis** `ipp_print_job` | Nach jedem Druck – z. B. um dem anderen eine Nachricht zu schicken („Anna hat 3 Seiten gedruckt“). |
+| **Sensor** „Letzter Druck“ | Zeitpunkt; Attribute: Name, Datei, Kopien, Farbe, Seiten (beidseitig oder nicht), Seitenzahl, Seitenbereich, Auftragsnummer, Ergebnis. |
+| **Sensor** „Ergebnis“ | Was aus dem letzten Auftrag NACH der Übergabe geworden ist: übergeben, wartet (z. B. kein Papier), gedruckt, fehlgeschlagen oder unklar. |
+| **Push-Benachrichtigung** (optional) | Erfolg, „kein Papier“ & Co. direkt aufs Handy – wenn ein Empfänger eingerichtet ist (siehe unten). |
+| **Ereignis** `ipp_print_job` | Beim Übergeben an den Drucker – z. B. um dem anderen eine Nachricht zu schicken („Anna hat 3 Seiten gedruckt“). |
+| **Ereignis** `ipp_print_job_result` | Zwischenstände und Endergebnis NACH der Übergabe (siehe „Rückmeldung nach dem Drucken“). |
 
 Was gedruckt werden kann: **PDF** und **JPEG** (auch TIFF und PostScript). Alles andere (Word, Pages, Fotos im
 HEIC-Format, Webseiten …) wandelt der iPhone-Kurzbefehl unten vorher in ein PDF um.
@@ -54,6 +57,10 @@ Den Ordner `custom_components/ipp_print` in das `custom_components`-Verzeichnis 
 
 Zum Prüfen die Adresse im Browser öffnen: Es kommt eine Meldung wie „Drucker bereit (…, idle)“. Gedruckt wird
 dabei nichts.
+
+4. Optional, unter *Konfigurieren*: **Push-Benachrichtigung an** – ein Gerät/eine Person, die per Mitteilung
+   erfährt, wie ein Druckauftrag ausgegangen ist (siehe nächster Abschnitt). Leer lassen, wenn das nicht gebraucht
+   wird.
 
 ## Kurzbefehl auf dem iPhone („Teilen → Drucken“)
 
@@ -89,6 +96,29 @@ Dein Partner legt denselben Kurzbefehl auf dem eigenen iPhone an (und ändert `n
 **Android:** Mit der kostenlosen App *HTTP Shortcuts* geht dasselbe: ein Shortcut mit „Als Teilen-Ziel
 verwenden“, Methode POST, Datei als Anfragetext, dieselbe Adresse und dieselben Angaben.
 
+## Rückmeldung nach dem Drucken
+
+Dass der Drucker den Auftrag **angenommen** hat, heißt noch nicht, dass er auch fertig gedruckt wird – geht z. B.
+mitten im Druck das Papier aus, hält er einfach an. IPP Print fragt danach von sich aus beim Drucker nach (alle paar
+Sekunden, bis zu 15 Minuten lang) und meldet:
+
+- **wartet** – der Drucker ist angehalten, z. B. „Kein Papier“, „Papierstau“ oder „Toner leer“ (Text kommt vom
+  Drucker, unbekannte Meldungen werden möglichst verständlich wiedergegeben statt verschluckt).
+- **gedruckt** – fertig.
+- **fehlgeschlagen** – abgebrochen, mit Grund, falls der Drucker einen mitliefert.
+- **unklar** – der Drucker kennt den Auftrag nicht mehr (meist harmlos: er hat ihn schon abgeschlossen und
+  vergessen) oder es hat sich 15 Minuten lang nichts getan.
+
+Das siehst du auf drei Wegen, auch kombiniert:
+
+1. **Push-Benachrichtigung**, wenn unter *Konfigurieren* ein Ziel eingetragen ist (eine `notify`-Entität, z. B. die
+   deiner Handy-App „Home Assistant“ – in *Entwicklerwerkzeuge → Zustände* nach `notify.` suchen, um den Namen zu
+   finden). Dann kommen alle vier Ergebnisse als Mitteilung.
+2. **Ohne** eingetragenes Ziel zeigt Home Assistant bei „wartet“ und „fehlgeschlagen“ trotzdem eine eigene Meldung
+   (Glocke oben rechts) – ein normaler Druck bleibt dabei still, um nicht bei jedem Ausdruck zu nerven.
+3. **Sensor „Ergebnis“** und die Attribute `status`/`status_reason` am Sensor „Letzter Druck“, für ein Dashboard
+   oder eigene Automationen.
+
 ## Angaben in der Adresse (Query-Parameter)
 
 | Angabe | Werte | Standard |
@@ -122,6 +152,26 @@ automation:
           message: >-
             {{ trigger.event.data.name }} hat „{{ trigger.event.data.filename }}“ gedruckt
             ({{ trigger.event.data.copies }}×{{ ', Farbe' if trigger.event.data.color else '' }}).
+```
+
+Für das **Ergebnis nach dem Drucken** (siehe oben) gibt es zusätzlich `ipp_print_job_result`, mit `status`
+(`waiting`/`done`/`failed`/`unclear`) und `reason` (Text oder `null`) – nützlich, wenn mehr als eine Push-
+Benachrichtigung passieren soll, z. B. zusätzlich eine Lampe blinken lassen, wenn kein Papier mehr da ist:
+
+```yaml
+automation:
+  - alias: "Kein Papier mehr: Lampe blinken lassen"
+    triggers:
+      - trigger: event
+        event_type: ipp_print_job_result
+        event_data:
+          status: waiting
+    actions:
+      - action: light.turn_on
+        target:
+          entity_id: light.buero
+        data:
+          flash: long
 ```
 
 ## Sicherheit

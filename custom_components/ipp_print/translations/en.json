@@ -27,7 +27,11 @@
         "title": "Webhook address for printing",
         "description": "Enter this address in the shortcut – **keep it secret**, anyone with the address can print:\n\n`{url}`\n\nPrinter: {printer}",
         "data": {
-          "regenerate": "Generate a new address (the old one stops working)"
+          "regenerate": "Generate a new address (the old one stops working)",
+          "notify_target": "Send push notification to"
+        },
+        "data_description": {
+          "notify_target": "Optional: device/person to notify on success, missing paper etc. (e.g. “Florian's phone”). Leave empty for no push notification – problems will still show up as a Home Assistant notification."
         }
       }
     }
@@ -44,6 +48,16 @@
       },
       "last_job": {
         "name": "Last print"
+      },
+      "last_job_result": {
+        "name": "Result",
+        "state": {
+          "submitted": "Submitted",
+          "waiting": "Waiting",
+          "done": "Done",
+          "failed": "Failed",
+          "unclear": "Unclear"
+        }
       }
     }
   }

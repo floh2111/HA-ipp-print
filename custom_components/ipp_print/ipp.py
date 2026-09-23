@@ -19,6 +19,7 @@ import aiohttp
 # --- Operationen und Tags (RFC 8011) -----------------------------------------------------------
 OP_PRINT_JOB = 0x0002
 OP_VALIDATE_JOB = 0x0004
+OP_GET_JOB_ATTRIBUTES = 0x0009
 OP_GET_PRINTER_ATTRIBUTES = 0x000B
 
 TAG_OPERATION = 0x01
@@ -41,6 +42,12 @@ _INT_TAGS = (INTEGER, ENUM)
 _TEXT_TAGS = (0x41, 0x42, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49)  # text/name/keyword/uri/uriScheme/charset/language/mime
 
 PRINTER_STATES = {3: "idle", 4: "processing", 5: "stopped"}
+
+# job-state (RFC 8011 §4.3.7). "processing-stopped" ist der für uns interessante Zustand: der Drucker hat den
+# Auftrag angenommen, kommt aber gerade nicht weiter (z. B. kein Papier) - er wartet, bricht aber nicht ab.
+JOB_STATES = {
+    3: "pending", 4: "pending-held", 5: "processing", 6: "processing-stopped", 7: "canceled", 8: "aborted", 9: "completed",
+}
 
 _request_ids = itertools.count(1)
 
@@ -249,6 +256,50 @@ def format_page_ranges(ranges: list[tuple[int, int]]) -> str:
     return ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in ranges)
 
 
+# job-state-reasons/printer-state-reasons (RFC 8011 §4.3.8/§4.4.12): Schlüsselwörter, oft mit Endung "-warning"/
+# "-error"/"-report" für den Schweregrad. Nicht jeder Drucker/Hersteller nutzt genau diese Namen, deshalb ein
+# Klartext-Fallback (Bindestriche durch Leerzeichen) für unbekannte Gründe statt einer Fehlermeldung.
+_REASON_TEXT = {
+    "media-empty": "Kein Papier",
+    "media-needed": "Papier fehlt",
+    "media-low": "Papier wird knapp",
+    "media-jam": "Papierstau",
+    "toner-empty": "Toner leer",
+    "toner-low": "Toner wird knapp",
+    "marker-supply-empty": "Toner/Tinte leer",
+    "marker-supply-low": "Toner/Tinte wird knapp",
+    "marker-waste-almost-full": "Resttonerbehälter fast voll",
+    "marker-waste-full": "Resttonerbehälter voll",
+    "door-open": "Klappe offen",
+    "cover-open": "Abdeckung offen",
+    "input-tray-missing": "Papierfach fehlt",
+    "output-tray-missing": "Ausgabefach fehlt",
+    "output-area-almost-full": "Ausgabefach fast voll",
+    "output-area-full": "Ausgabefach voll",
+    "spool-area-full": "Speicher des Druckers ist voll",
+    "interpreter-resource-unavailable": "Drucker überlastet",
+    "job-canceled-by-user": "Vom Nutzer abgebrochen",
+    "job-canceled-by-operator": "Am Drucker abgebrochen",
+    "job-completed-with-errors": "Mit Fehlern abgeschlossen",
+    "job-completed-with-warnings": "Mit Warnungen abgeschlossen",
+    "printer-stopped": "Drucker gestoppt",
+}
+_REASON_SUFFIX = re.compile(r"-(warning|error|report)$")
+
+
+def describe_job_reasons(reasons: list[str] | None) -> str | None:
+    """['media-empty-warning', 'media-empty-warning'] -> 'Kein Papier'; leer/None -> None."""
+    if not reasons:
+        return None
+    texts: list[str] = []
+    for raw in reasons:
+        key = _REASON_SUFFIX.sub("", raw)
+        text = _REASON_TEXT.get(key, key.replace("-", " "))
+        if text not in texts:
+            texts.append(text)
+    return ", ".join(texts)
+
+
 def normalize_printer_url(raw: str) -> str:
     """'192.168.1.5', 'drucker.local' oder eine volle ipp(s)://-Adresse -> ipp(s)://host:port/pfad."""
     value = (raw or "").strip()
@@ -346,6 +397,23 @@ class IppPrinter:
             "reasons": [r for r in attrs.get("printer-state-reasons", []) if r != "none"],
             "accepting": bool(first("printer-is-accepting-jobs", True)),
             "formats": attrs.get("document-format-supported", []),
+        }
+
+    async def get_job_attributes(self, job_id: int) -> dict[str, Any]:
+        """Zustand eines einzelnen Druckauftrags: 'state' (siehe JOB_STATES) und 'reasons' (z. B. ['media-empty-warning']).
+
+        Kennt der Drucker den Auftrag nicht mehr (z. B. schon abgeschlossen und aus der Historie entfernt), lehnt er
+        mit einem Client-Fehler ab (bei einem echten Kyocera ECOSYS: 0x0400) - das behandelt der Aufrufer gesondert.
+        """
+        response = await self._execute(
+            OP_GET_JOB_ATTRIBUTES,
+            [(INTEGER, "job-id", job_id), (KEYWORD, "requested-attributes", ["job-state", "job-state-reasons"])],
+        )
+        attrs = response.attributes(TAG_JOB)
+        state_code = (attrs.get("job-state") or [None])[0]
+        return {
+            "state": JOB_STATES.get(state_code, "unknown"),
+            "reasons": [r for r in attrs.get("job-state-reasons", []) if r != "none"],
         }
 
     async def validate_job(self, job: PrintJob) -> None:

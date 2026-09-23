@@ -46,6 +46,12 @@ class FakePrinter:
         self.job_message = ""
         self.down = False
         self.next_job_id = 41
+        # Get-Job-Attributes: job_id -> Liste von (job-state-Zahl, [Gründe]); wird der Reihe nach abgearbeitet,
+        # der letzte Eintrag wiederholt sich (so wie ein Drucker in einem Zustand verharrt, bis sich etwas ändert).
+        # "down" statt eines Eintrags simuliert einen Verbindungsabbruch bei genau dieser Abfrage.
+        # Kein Eintrag für eine job-id = der Drucker kennt den Auftrag nicht (mehr) - wie beim echten Kyocera
+        # gemessen (IPP-Status 0x0400 auf eine erfundene Auftragsnummer).
+        self.job_attribute_sequences: dict[int, list[Any]] = {}
 
     @property
     def prints(self) -> list[dict[str, Any]]:
@@ -68,6 +74,19 @@ class FakePrinter:
             (ipp.CHARSET, "attributes-charset", "utf-8"),
             (ipp.LANGUAGE, "attributes-natural-language", "en"),
         ]
+        if req.status == ipp.OP_GET_JOB_ATTRIBUTES:
+            job_id = first("job-id")
+            sequence = self.job_attribute_sequences.get(job_id)
+            if not sequence:
+                body = ipp_reply(0x0400, req.request_id, [(ipp.TAG_OPERATION, base)])
+            else:
+                step = sequence.pop(0) if len(sequence) > 1 else sequence[0]
+                if step == "down":
+                    return AiohttpClientMockResponse(method, url, exc=aiohttp.ClientConnectionError("Drucker aus"))
+                state_code, reasons = step
+                job_attrs = [(ipp.ENUM, "job-state", state_code), (ipp.KEYWORD, "job-state-reasons", list(reasons) or "none")]
+                body = ipp_reply(0, req.request_id, [(ipp.TAG_OPERATION, base), (ipp.TAG_JOB, job_attrs)])
+            return AiohttpClientMockResponse(method, url, response=body)
         if req.status == ipp.OP_GET_PRINTER_ATTRIBUTES:
             groups = [
                 (ipp.TAG_OPERATION, base),

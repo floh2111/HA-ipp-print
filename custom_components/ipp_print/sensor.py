@@ -24,7 +24,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: IppPrintConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     data = entry.runtime_data
-    async_add_entities([PrinterStateSensor(entry, data.status), LastJobSensor(entry, data.manager)])
+    async_add_entities([
+        PrinterStateSensor(entry, data.status),
+        LastJobSensor(entry, data.manager),
+        LastJobResultSensor(entry, data.manager),
+    ])
 
 
 def _device(entry: IppPrintConfigEntry, model: str | None) -> DeviceInfo:
@@ -100,4 +104,44 @@ class LastJobSensor(SensorEntity):
             "pages": last.pages,
             "page_range": last.page_range,
             "job_id": last.job_id,
+            "status": last.status,
+            "status_reason": last.status_reason,
         }
+
+
+class LastJobResultSensor(SensorEntity):
+    """Ergebnis des letzten Druckauftrags NACH der Übergabe: übermittelt / wartet (z. B. kein Papier) / gedruckt /
+    fehlgeschlagen / unklar (der Drucker kennt den Auftrag nicht mehr - meist harmlos)."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "last_job_result"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["submitted", "waiting", "done", "failed", "unclear"]
+    _attr_icon = "mdi:printer-check"
+
+    def __init__(self, entry: IppPrintConfigEntry, manager: PrintManager) -> None:
+        self._entry = entry
+        self._manager = manager
+        self._attr_unique_id = f"{entry.entry_id}_last_job_result"
+        self._attr_device_info = _device(entry, entry.runtime_data.status.data.get("model"))
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_JOB.format(self._entry.entry_id), self._handle_job)
+        )
+
+    @callback
+    def _handle_job(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> str | None:
+        return self._manager.last.status if self._manager.last else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        last = self._manager.last
+        if last is None:
+            return {}
+        return {"reason": last.status_reason, "filename": last.filename, "job_id": last.job_id}

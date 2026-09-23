@@ -27,7 +27,11 @@
         "title": "Webhook-Adresse zum Drucken",
         "description": "Diese Adresse trägst du in den Kurzbefehl ein – **halte sie geheim**, jeder mit der Adresse kann drucken:\n\n`{url}`\n\nDrucker: {printer}",
         "data": {
-          "regenerate": "Neue Adresse erzeugen (die alte wird ungültig)"
+          "regenerate": "Neue Adresse erzeugen (die alte wird ungültig)",
+          "notify_target": "Push-Benachrichtigung an"
+        },
+        "data_description": {
+          "notify_target": "Optional: Gerät/Person, die bei Erfolg, fehlendem Papier o. Ä. eine Mitteilung bekommen soll (z. B. „Handy von Florian“). Leer lassen für keine Push-Benachrichtigung – bei Problemen erscheint dann trotzdem eine Meldung in Home Assistant."
         }
       }
     }
@@ -44,6 +48,16 @@
       },
       "last_job": {
         "name": "Letzter Druck"
+      },
+      "last_job_result": {
+        "name": "Ergebnis",
+        "state": {
+          "submitted": "Übergeben",
+          "waiting": "Wartet",
+          "done": "Gedruckt",
+          "failed": "Fehlgeschlagen",
+          "unclear": "Unklar"
+        }
       }
     }
   }

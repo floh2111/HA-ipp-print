@@ -173,3 +173,92 @@ def test_parse_page_ranges_rejects(text: str) -> None:
 
 def test_format_page_ranges() -> None:
     assert ipp.format_page_ranges([(1, 3), (5, 5), (7, 9)]) == "1-3, 5, 7-9"
+
+
+# --- Auftragsstatus (Verfolgung nach der Übergabe) -----------------------------------------------------
+@pytest.mark.parametrize(
+    ("reasons", "expected"),
+    [
+        (None, None),
+        ([], None),
+        (["media-empty-warning"], "Kein Papier"),
+        (["media-empty-error"], "Kein Papier"),
+        (["media-empty-report"], "Kein Papier"),
+        (["media-jam-error"], "Papierstau"),
+        (["toner-empty-warning"], "Toner leer"),
+        (["door-open-warning"], "Klappe offen"),
+        (["media-empty-warning", "media-empty-warning"], "Kein Papier"),  # keine Wiederholung
+        (["media-empty-warning", "toner-low-warning"], "Kein Papier, Toner wird knapp"),  # Reihenfolge bleibt
+        (["some-unknown-thing-warning"], "some unknown thing"),  # unbekannt: Klartext-Fallback statt Absturz
+        (["none"], "none"),  # kommt hier nicht vorgefiltert an - reine Übersetzungsfunktion
+    ],
+)
+def test_describe_job_reasons(reasons, expected) -> None:
+    assert ipp.describe_job_reasons(reasons) == expected
+
+
+async def test_get_job_attributes_reads_state_and_reasons(hass_stub=None) -> None:
+    import aiohttp
+
+    from custom_components.ipp_print.ipp import IppPrinter
+
+    class FakeSession:
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def post(self, url, data, headers, **kwargs):
+            return FakeResponse(self.body)
+
+    class FakeResponse:
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+            self.status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def read(self):
+            return self.body
+
+    def reply(state_code: int, reasons: list[str]) -> bytes:
+        from tests.conftest import ipp_reply
+
+        job_attrs = [(ipp.ENUM, "job-state", state_code), (ipp.KEYWORD, "job-state-reasons", reasons or "none")]
+        return ipp_reply(0, 1, [(ipp.TAG_OPERATION, []), (ipp.TAG_JOB, job_attrs)])
+
+    printer = IppPrinter(FakeSession(reply(6, ["media-empty-warning"])), "192.168.1.20")
+    info = await printer.get_job_attributes(42)
+    assert info == {"state": "processing-stopped", "reasons": ["media-empty-warning"]}
+
+    printer2 = IppPrinter(FakeSession(reply(9, [])), "192.168.1.20")
+    assert await printer2.get_job_attributes(42) == {"state": "completed", "reasons": []}
+
+
+async def test_get_job_attributes_unknown_job_raises_response_error() -> None:
+    from custom_components.ipp_print.ipp import IppPrinter, IppResponseError
+
+    class FakeSession:
+        def post(self, url, data, headers, **kwargs):
+            return FakeResponse()
+
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def read(self):
+            from tests.conftest import ipp_reply
+
+            return ipp_reply(0x0400, 1, [(ipp.TAG_OPERATION, [])])
+
+    printer = IppPrinter(FakeSession(), "192.168.1.20")
+    with pytest.raises(IppResponseError) as excinfo:
+        await printer.get_job_attributes(999999)
+    assert excinfo.value.status == 0x0400
