@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ipp_print"
 # Muss mit "version" in manifest.json übereinstimmen (ein Test prüft das).
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 CONF_PRINTER_URL = "printer_url"
 CONF_WEBHOOK_ID = "webhook_id"

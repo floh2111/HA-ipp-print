@@ -18,6 +18,7 @@ from homeassistant.components import persistent_notification, webhook
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
@@ -327,10 +328,7 @@ class PrintManager:
             if message is None:
                 return
             try:
-                await self.hass.services.async_call(
-                    "notify", "send_message", {"entity_id": target, "message": message, "title": "🖨️ IPP Print"},
-                    blocking=False,
-                )
+                await self._send_push(target, message)
             except Exception as err:  # noqa: BLE001 - Zielgerät ungültig/entfernt o. Ä.; darf den Rest nicht stören
                 _LOGGER.warning("Push-Benachrichtigung an %s fehlgeschlagen: %s", target, err)
             return
@@ -340,6 +338,31 @@ class PrintManager:
             persistent_notification.async_create(self.hass, message, title="🖨️ IPP Print", notification_id=notification_id)
         elif status in ("done", "unclear"):
             persistent_notification.async_dismiss(self.hass, notification_id)
+
+    async def _send_push(self, target: str, message: str) -> None:
+        """Ein "notify"-Ziel anschreiben - je nachdem, was für eine Art Ziel es ist:
+
+        - eine ECHTE Entität (neuere notify-Plattformen, z. B. Telegram/Signal-Bots): über den gemeinsamen Dienst
+          "notify.send_message" mit "entity_id" (das ist der heute empfohlene Weg).
+        - ein KLASSISCHER, gerätespezifischer Dienst OHNE eigene Entität - so funktioniert bis heute z. B. die
+          Handy-App "Home Assistant" (notify.mobile_app_<gerät>): dort ist alles nach "notify." bereits der
+          Diensname selbst, es gibt dafür keine Entität. "notify.send_message" mit "entity_id" liefe hier ins
+          Leere (kein Fehler, aber auch keine Nachricht - lässt sich an der Entität einfach nicht festmachen).
+        Unterschieden wird daran, ob es zu dem Namen einen Zustand gibt (jede echte Entität hat einen, ein
+        klassischer Dienst nie).
+        """
+        domain, _, rest = target.partition(".")
+        if domain != "notify" or not rest:
+            raise HomeAssistantError(f"Kein gültiges Push-Ziel: {target}")
+        if self.hass.states.get(target) is not None:
+            await self.hass.services.async_call(
+                "notify", "send_message", {"entity_id": target, "message": message, "title": "🖨️ IPP Print"},
+                blocking=True,
+            )
+        else:
+            await self.hass.services.async_call(
+                "notify", rest, {"message": message, "title": "🖨️ IPP Print"}, blocking=True,
+            )
 
     def shutdown(self) -> None:
         """Wird beim Entladen der Integration aufgerufen: alle laufenden Verfolgungen beenden."""

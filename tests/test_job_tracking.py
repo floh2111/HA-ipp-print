@@ -4,12 +4,15 @@ Push-Benachrichtigung/Meldung in Home Assistant, Sensor "Ergebnis", und Aufräum
 from __future__ import annotations
 
 from datetime import timedelta
+import logging
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events, async_fire_time_changed
 
 from homeassistant.components import persistent_notification as pn
+from homeassistant.components.notify import NotifyEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_platform, entity_registry as er
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.ipp_print import notify_target_for, parse_notify_by_name
@@ -263,15 +266,20 @@ async def test_unloading_stops_tracking(
 
 
 # --- Push-Benachrichtigung über ein konfiguriertes notify-Ziel --------------------------------------------------
+# Die Handy-App "Home Assistant" (mobile_app) und die meisten anderen Push-Wege registrieren ihr Ziel bis heute als
+# EIGENEN, klassischen Dienst (z. B. "notify.mobile_app_iphone" direkt aufrufbar) - NICHT als Entität mit eigenem
+# Zustand. Das bildet dieser Helfer nach; "notify.send_message" (der neuere, entitätsbasierte Weg) wird separat
+# unten mit einer echten NotifyEntity getestet.
+def _register_legacy_notify(hass: HomeAssistant, calls: list, *names: str):
+    for name in names:
+        hass.services.async_register("notify", name, lambda call, n=name: calls.append({"service": n, **dict(call.data)}))
+
+
 async def test_notify_target_receives_all_outcomes(
     hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
 ) -> None:
     calls = []
-
-    async def fake_send_message(call):
-        calls.append({"entity_id": call.data.get("entity_id"), "message": call.data.get("message")})
-
-    hass.services.async_register("notify", "send_message", fake_send_message)
+    _register_legacy_notify(hass, calls, "mobile_app_iphone")
     hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_TARGET: "notify.mobile_app_iphone"})
     await hass.async_block_till_done()
 
@@ -280,7 +288,7 @@ async def test_notify_target_receives_all_outcomes(
 
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls[-1]["entity_id"] == "notify.mobile_app_iphone"
+    assert calls[-1]["service"] == "mobile_app_iphone"
     assert "Kein Papier" in calls[-1]["message"] and "Rechnung.pdf" in calls[-1]["message"]
 
     _advance(hass)
@@ -295,7 +303,7 @@ async def test_notify_target_failure_and_success_both_reported(
     hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
 ) -> None:
     calls = []
-    hass.services.async_register("notify", "send_message", lambda call: calls.append(call.data.get("message")))
+    _register_legacy_notify(hass, calls, "mobile_app_iphone")
     hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_TARGET: "notify.mobile_app_iphone"})
     await hass.async_block_till_done()
 
@@ -303,7 +311,38 @@ async def test_notify_target_failure_and_success_both_reported(
     printer.job_attribute_sequences[job_id] = [(8, ["toner-empty-error"])]
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls and "fehlgeschlagen" in calls[-1] and "Toner leer" in calls[-1]
+    assert calls and "fehlgeschlagen" in calls[-1]["message"] and "Toner leer" in calls[-1]["message"]
+
+
+async def test_notify_target_as_real_entity_uses_send_message(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    """Neuere notify-Plattformen (z. B. Telegram/Signal-Bots) sind echte Entitäten - dafür der andere Weg."""
+    received = []
+
+    class FakeNotifyEntity(NotifyEntity):
+        _attr_name = "Fake"
+        _attr_unique_id = "fake_notify_entity"
+
+        async def async_send_message(self, message: str, title: str | None = None) -> None:
+            received.append({"message": message, "title": title})
+
+    assert await async_setup_component(hass, "notify", {})
+    platform = entity_platform.EntityPlatform(
+        hass=hass, logger=logging.getLogger(__name__), domain="notify", platform_name="test", platform=None,
+        scan_interval=timedelta(seconds=30), entity_namespace=None,
+    )
+    await platform.async_add_entities([FakeNotifyEntity()])
+    await hass.async_block_till_done()
+    [entity_id] = hass.states.async_entity_ids("notify")
+
+    hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_TARGET: entity_id})
+    await hass.async_block_till_done()
+    job_id = await _print(hass_client_no_auth, "?filename=Rechnung.pdf")
+    printer.job_attribute_sequences[job_id] = [(9, [])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    assert received and "Rechnung.pdf" in received[-1]["message"]
 
 
 async def test_notify_target_invalid_entity_does_not_raise(
@@ -406,7 +445,7 @@ async def test_notify_by_name_routes_to_the_matching_person(
     hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
 ) -> None:
     calls = []
-    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    _register_legacy_notify(hass, calls, "florian", "deborah")
     hass.config_entries.async_update_entry(
         setup_integration,
         options={CONF_NOTIFY_BY_NAME: "Florian: notify.florian\nDeborah: notify.deborah"},
@@ -417,14 +456,14 @@ async def test_notify_by_name_routes_to_the_matching_person(
     printer.job_attribute_sequences[job_florian] = [(9, [])]
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls[-1]["entity_id"] == "notify.florian"
+    assert calls[-1]["service"] == "florian"
     assert "Rechnung.pdf" in calls[-1]["message"]
 
     job_deborah = await _print(hass_client_no_auth, "?name=Deborah&filename=Steuer.pdf")
     printer.job_attribute_sequences[job_deborah] = [(9, [])]
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls[-1]["entity_id"] == "notify.deborah"
+    assert calls[-1]["service"] == "deborah"
     assert "Steuer.pdf" in calls[-1]["message"]
 
 
@@ -432,7 +471,7 @@ async def test_notify_by_name_case_insensitive_and_unmatched_name(
     hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
 ) -> None:
     calls = []
-    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    _register_legacy_notify(hass, calls, "florian")
     hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_BY_NAME: "florian: notify.florian"})
     await hass.async_block_till_done()
 
@@ -440,14 +479,14 @@ async def test_notify_by_name_case_insensitive_and_unmatched_name(
     printer.job_attribute_sequences[job_id] = [(9, [])]
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls[-1]["entity_id"] == "notify.florian"  # Groß-/Kleinschreibung des Namens spielt keine Rolle
+    assert calls[-1]["service"] == "florian"  # Groß-/Kleinschreibung des Namens spielt keine Rolle
 
 
 async def test_notify_by_name_falls_back_to_default_target_for_unknown_name(
     hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
 ) -> None:
     calls = []
-    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    _register_legacy_notify(hass, calls, "florian", "default")
     hass.config_entries.async_update_entry(
         setup_integration,
         options={CONF_NOTIFY_BY_NAME: "Florian: notify.florian", CONF_NOTIFY_TARGET: "notify.default"},
@@ -458,7 +497,7 @@ async def test_notify_by_name_falls_back_to_default_target_for_unknown_name(
     printer.job_attribute_sequences[job_id] = [(9, [])]
     _advance(hass)
     await hass.async_block_till_done()
-    assert calls[-1]["entity_id"] == "notify.default"
+    assert calls[-1]["service"] == "default"
 
 
 async def test_notify_by_name_without_default_falls_back_to_ha_notification_for_unknown_name(
