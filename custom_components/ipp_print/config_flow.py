@@ -14,7 +14,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import CONF_NOTIFY_TARGET, CONF_PRINTER_URL, CONF_WEBHOOK_ID, DOMAIN
+from .const import CONF_NOTIFY_BY_NAME, CONF_NOTIFY_TARGET, CONF_PRINTER_URL, CONF_WEBHOOK_ID, DOMAIN
 from .ipp import IppError, IppPrinter, normalize_printer_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,15 +70,24 @@ class IppPrintOptionsFlow(OptionsFlowWithReload):
                 # Der Webhook selbst steht in entry.data (siehe oben), nicht in den Optionen - deshalb ausdrücklich
                 # neu laden, damit er unter der neuen Adresse registriert wird.
                 self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
-            return self.async_create_entry(data={CONF_NOTIFY_TARGET: user_input.get(CONF_NOTIFY_TARGET) or None})
+            return self.async_create_entry(
+                data={
+                    CONF_NOTIFY_TARGET: user_input.get(CONF_NOTIFY_TARGET) or None,
+                    CONF_NOTIFY_BY_NAME: user_input.get(CONF_NOTIFY_BY_NAME) or None,
+                }
+            )
         url = webhook.async_generate_url(self.hass, self.config_entry.data[CONF_WEBHOOK_ID], prefer_external=True)
         schema = vol.Schema(
             {
                 vol.Optional(CONF_REGENERATE, default=False): bool,
                 vol.Optional(CONF_NOTIFY_TARGET): selector.EntitySelector(selector.EntitySelectorConfig(domain="notify")),
+                vol.Optional(CONF_NOTIFY_BY_NAME): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
             }
         )
-        suggested = {CONF_NOTIFY_TARGET: self.config_entry.options.get(CONF_NOTIFY_TARGET)}
+        suggested = {
+            CONF_NOTIFY_TARGET: self.config_entry.options.get(CONF_NOTIFY_TARGET),
+            CONF_NOTIFY_BY_NAME: self.config_entry.options.get(CONF_NOTIFY_BY_NAME),
+        }
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(schema, suggested),

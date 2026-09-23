@@ -58,9 +58,9 @@ Den Ordner `custom_components/ipp_print` in das `custom_components`-Verzeichnis 
 Zum Prüfen die Adresse im Browser öffnen: Es kommt eine Meldung wie „Drucker bereit (…, idle)“. Gedruckt wird
 dabei nichts.
 
-4. Optional, unter *Konfigurieren*: **Push-Benachrichtigung an** – ein Gerät/eine Person, die per Mitteilung
-   erfährt, wie ein Druckauftrag ausgegangen ist (siehe nächster Abschnitt). Leer lassen, wenn das nicht gebraucht
-   wird.
+4. Optional, unter *Konfigurieren*: **Push-Benachrichtigung an** und/oder **Push je nach Namen** – wer per
+   Mitteilung erfährt, wie ein Druckauftrag ausgegangen ist (siehe nächster Abschnitt). Leer lassen, wenn das
+   nicht gebraucht wird.
 
 ## Kurzbefehl auf dem iPhone („Teilen → Drucken“)
 
@@ -109,14 +109,26 @@ Sekunden, bis zu 15 Minuten lang) und meldet:
 - **unklar** – der Drucker kennt den Auftrag nicht mehr (meist harmlos: er hat ihn schon abgeschlossen und
   vergessen) oder es hat sich 15 Minuten lang nichts getan.
 
-Das siehst du auf drei Wegen, auch kombiniert:
+Das siehst du auf mehreren Wegen, auch kombiniert:
 
 1. **Push-Benachrichtigung**, wenn unter *Konfigurieren* ein Ziel eingetragen ist (eine `notify`-Entität, z. B. die
    deiner Handy-App „Home Assistant“ – in *Entwicklerwerkzeuge → Zustände* nach `notify.` suchen, um den Namen zu
    finden). Dann kommen alle vier Ergebnisse als Mitteilung.
-2. **Ohne** eingetragenes Ziel zeigt Home Assistant bei „wartet“ und „fehlgeschlagen“ trotzdem eine eigene Meldung
+2. **Push je nach Namen**: eigenes Ziel für jede Person, die per `name=` im Kurzbefehl druckt – eine Zeile pro
+   Person, z. B.
+
+   ```
+   Florian: notify.mobile_app_iphone_von_florian
+   Deborah: notify.mobile_app_iphone_von_deborah
+   ```
+
+   So bekommt jede:r die Mitteilung zum eigenen Druckauftrag aufs eigene Handy (Groß-/Kleinschreibung egal). Es
+   geht auch andersherum – trägst du bei „Florian“ das Handy deiner Partnerin ein, wird sie über deine
+   Druckaufträge informiert. Ein Name ohne passende Zeile fällt auf „Push-Benachrichtigung an“ zurück, falls dort
+   etwas eingetragen ist.
+3. **Ohne** passendes Ziel zeigt Home Assistant bei „wartet“ und „fehlgeschlagen“ trotzdem eine eigene Meldung
    (Glocke oben rechts) – ein normaler Druck bleibt dabei still, um nicht bei jedem Ausdruck zu nerven.
-3. **Sensor „Ergebnis“** und die Attribute `status`/`status_reason` am Sensor „Letzter Druck“, für ein Dashboard
+4. **Sensor „Ergebnis“** und die Attribute `status`/`status_reason` am Sensor „Letzter Druck“, für ein Dashboard
    oder eigene Automationen.
 
 ## Angaben in der Adresse (Query-Parameter)

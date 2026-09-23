@@ -28,10 +28,12 @@
         "description": "Diese Adresse trägst du in den Kurzbefehl ein – **halte sie geheim**, jeder mit der Adresse kann drucken:\n\n`{url}`\n\nDrucker: {printer}",
         "data": {
           "regenerate": "Neue Adresse erzeugen (die alte wird ungültig)",
-          "notify_target": "Push-Benachrichtigung an"
+          "notify_target": "Push-Benachrichtigung an",
+          "notify_by_name": "Push je nach Namen (optional)"
         },
         "data_description": {
-          "notify_target": "Optional: Gerät/Person, die bei Erfolg, fehlendem Papier o. Ä. eine Mitteilung bekommen soll (z. B. „Handy von Florian“). Leer lassen für keine Push-Benachrichtigung – bei Problemen erscheint dann trotzdem eine Meldung in Home Assistant."
+          "notify_target": "Optional: Gerät/Person, die bei Erfolg, fehlendem Papier o. Ä. eine Mitteilung bekommen soll (z. B. „Handy von Florian“). Leer lassen für keine Push-Benachrichtigung – bei Problemen erscheint dann trotzdem eine Meldung in Home Assistant.",
+          "notify_by_name": "Eine Zeile pro Person, z. B.:\nFlorian: notify.mobile_app_iphone_von_florian\nDeborah: notify.mobile_app_iphone_von_deborah\n\nDer Name kommt aus dem Kurzbefehl („name=“ in der Adresse). Passt keiner, gilt stattdessen „Push-Benachrichtigung an“ oben, falls dort etwas eingetragen ist."
         }
       }
     }

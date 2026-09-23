@@ -28,10 +28,12 @@
         "description": "Enter this address in the shortcut – **keep it secret**, anyone with the address can print:\n\n`{url}`\n\nPrinter: {printer}",
         "data": {
           "regenerate": "Generate a new address (the old one stops working)",
-          "notify_target": "Send push notification to"
+          "notify_target": "Send push notification to",
+          "notify_by_name": "Push by name (optional)"
         },
         "data_description": {
-          "notify_target": "Optional: device/person to notify on success, missing paper etc. (e.g. “Florian's phone”). Leave empty for no push notification – problems will still show up as a Home Assistant notification."
+          "notify_target": "Optional: device/person to notify on success, missing paper etc. (e.g. “Florian's phone”). Leave empty for no push notification – problems will still show up as a Home Assistant notification.",
+          "notify_by_name": "One line per person, e.g.:\nFlorian: notify.mobile_app_iphone_von_florian\nDeborah: notify.mobile_app_iphone_von_deborah\n\nThe name comes from the shortcut (“name=” in the address). If none matches, “Send push notification to” above is used instead, if set."
         }
       }
     }

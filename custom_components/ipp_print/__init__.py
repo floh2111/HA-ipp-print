@@ -26,6 +26,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ANNOUNCED,
+    CONF_NOTIFY_BY_NAME,
     CONF_NOTIFY_TARGET,
     CONF_PRINTER_URL,
     CONF_WEBHOOK_ID,
@@ -88,6 +89,37 @@ class LastJob:
     # Drucker kennt den Auftrag nicht mehr - meist harmlos, wenn er ihn schon abgeschlossen und vergessen hat).
     status: str = "submitted"
     status_reason: str | None = None
+
+
+# Push-Ziel je nach "name=" aus dem Kurzbefehl (z. B. "Florian: notify.mobile_app_iphone_von_florian" - eine
+# Zeile pro Person, ":" oder "=" als Trenner; Kommentarzeilen mit "#" und leere Zeilen werden übersprungen). Wird
+# roh in den Optionen gespeichert (nicht vorgeparst), damit sich das Formular beim erneuten Öffnen unverändert
+# zeigt und ein künftig geändertes Format keine Migration bestehender Einträge braucht.
+def parse_notify_by_name(text: str | None) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, target = line.partition(":")
+        if not sep:
+            name, sep, target = line.partition("=")
+        if not sep:
+            continue  # Zeile ohne Trenner - ignorieren statt mit einem kryptischen Fehler abzubrechen
+        name, target = name.strip(), target.strip()
+        if name and target:
+            mapping[name] = target
+    return mapping
+
+
+def notify_target_for(by_name: dict[str, str] | None, name: str | None, default: str | None) -> str | None:
+    """Passendes Push-Ziel für einen Namen (Groß-/Kleinschreibung egal), sonst das Standardziel (falls gesetzt)."""
+    if by_name and name:
+        lower = name.lower()
+        for key, target in by_name.items():
+            if key.lower() == lower:
+                return target
+    return default
 
 
 # Baustein für die Push-Benachrichtigung/Meldung je nach Ergebnis; None = dafür wird nichts gemeldet.
@@ -282,11 +314,14 @@ class PrintManager:
                 "name": last.name if last else None, "filename": last.filename if last else None,
             },
         )
-        self.hass.async_create_task(self._notify(job_id, status, reason, last.filename if last else "Dokument"))
+        self.hass.async_create_task(
+            self._notify(job_id, status, reason, last.name if last else None, last.filename if last else "Dokument")
+        )
 
-    async def _notify(self, job_id: int, status: str, reason: str | None, filename: str) -> None:
+    async def _notify(self, job_id: int, status: str, reason: str | None, name: str | None, filename: str) -> None:
         message = _result_message(status, filename, reason)
-        target = self.entry.options.get(CONF_NOTIFY_TARGET)
+        by_name = parse_notify_by_name(self.entry.options.get(CONF_NOTIFY_BY_NAME))
+        target = notify_target_for(by_name, name, self.entry.options.get(CONF_NOTIFY_TARGET))
         notification_id = f"{DOMAIN}_{self.entry.entry_id}_job_{job_id}"
         if target:
             if message is None:

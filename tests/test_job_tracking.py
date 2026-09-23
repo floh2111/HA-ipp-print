@@ -12,7 +12,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from custom_components.ipp_print.const import CONF_NOTIFY_TARGET, EVENT_PRINT_JOB_RESULT, JOB_POLL_INTERVAL_SECONDS
+from custom_components.ipp_print import notify_target_for, parse_notify_by_name
+from custom_components.ipp_print.const import (
+    CONF_NOTIFY_BY_NAME,
+    CONF_NOTIFY_TARGET,
+    EVENT_PRINT_JOB_RESULT,
+    JOB_POLL_INTERVAL_SECONDS,
+)
 
 from .conftest import PDF, WEBHOOK_ID, FakePrinter
 
@@ -345,3 +351,142 @@ async def test_options_flow_regenerate_keeps_notify_target_field_available(
     await hass.async_block_till_done()
     assert result["type"] == "create_entry"
     assert setup_integration.options[CONF_NOTIFY_TARGET] == "notify.mobile_app_iphone"
+
+
+# --- Push-Ziel je nach Name im Kurzbefehl ------------------------------------------------------------------------
+def test_parse_notify_by_name() -> None:
+    text = "Florian: notify.mobile_app_iphone_von_florian\nDeborah: notify.mobile_app_iphone_von_deborah"
+    assert parse_notify_by_name(text) == {
+        "Florian": "notify.mobile_app_iphone_von_florian",
+        "Deborah": "notify.mobile_app_iphone_von_deborah",
+    }
+
+
+def test_parse_notify_by_name_accepts_equals_sign_and_trims_whitespace() -> None:
+    assert parse_notify_by_name("  Florian  =  notify.x  ") == {"Florian": "notify.x"}
+
+
+def test_parse_notify_by_name_skips_blank_lines_and_comments() -> None:
+    text = "\n# Wer bekommt was\nFlorian: notify.x\n\n  \n# Deborah: notify.y (noch nicht eingerichtet)\n"
+    assert parse_notify_by_name(text) == {"Florian": "notify.x"}
+
+
+def test_parse_notify_by_name_skips_lines_without_separator() -> None:
+    assert parse_notify_by_name("Florian notify.x\nDeborah: notify.y") == {"Deborah": "notify.y"}
+
+
+def test_parse_notify_by_name_empty_input() -> None:
+    assert parse_notify_by_name("") == {}
+    assert parse_notify_by_name(None) == {}
+    assert parse_notify_by_name("   \n  \n") == {}
+
+
+def test_parse_notify_by_name_ignores_incomplete_entries() -> None:
+    assert parse_notify_by_name("Florian:\n: notify.x\n:") == {}
+
+
+def test_notify_target_for_matches_case_insensitively() -> None:
+    by_name = {"Florian": "notify.florian", "deborah": "notify.deborah"}
+    assert notify_target_for(by_name, "Florian", "notify.default") == "notify.florian"
+    assert notify_target_for(by_name, "florian", "notify.default") == "notify.florian"
+    assert notify_target_for(by_name, "FLORIAN", "notify.default") == "notify.florian"
+    assert notify_target_for(by_name, "Deborah", "notify.default") == "notify.deborah"
+
+
+def test_notify_target_for_falls_back_to_default() -> None:
+    by_name = {"Florian": "notify.florian"}
+    assert notify_target_for(by_name, "Gast", "notify.default") == "notify.default"
+    assert notify_target_for(by_name, None, "notify.default") == "notify.default"
+    assert notify_target_for(None, "Florian", "notify.default") == "notify.default"
+    assert notify_target_for({}, "Florian", "notify.default") == "notify.default"
+    assert notify_target_for(by_name, "Gast", None) is None
+
+
+async def test_notify_by_name_routes_to_the_matching_person(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    calls = []
+    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    hass.config_entries.async_update_entry(
+        setup_integration,
+        options={CONF_NOTIFY_BY_NAME: "Florian: notify.florian\nDeborah: notify.deborah"},
+    )
+    await hass.async_block_till_done()
+
+    job_florian = await _print(hass_client_no_auth, "?name=Florian&filename=Rechnung.pdf")
+    printer.job_attribute_sequences[job_florian] = [(9, [])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    assert calls[-1]["entity_id"] == "notify.florian"
+    assert "Rechnung.pdf" in calls[-1]["message"]
+
+    job_deborah = await _print(hass_client_no_auth, "?name=Deborah&filename=Steuer.pdf")
+    printer.job_attribute_sequences[job_deborah] = [(9, [])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    assert calls[-1]["entity_id"] == "notify.deborah"
+    assert "Steuer.pdf" in calls[-1]["message"]
+
+
+async def test_notify_by_name_case_insensitive_and_unmatched_name(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    calls = []
+    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_BY_NAME: "florian: notify.florian"})
+    await hass.async_block_till_done()
+
+    job_id = await _print(hass_client_no_auth, "?name=FLORIAN")
+    printer.job_attribute_sequences[job_id] = [(9, [])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    assert calls[-1]["entity_id"] == "notify.florian"  # Groß-/Kleinschreibung des Namens spielt keine Rolle
+
+
+async def test_notify_by_name_falls_back_to_default_target_for_unknown_name(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    calls = []
+    hass.services.async_register("notify", "send_message", lambda call: calls.append(dict(call.data)))
+    hass.config_entries.async_update_entry(
+        setup_integration,
+        options={CONF_NOTIFY_BY_NAME: "Florian: notify.florian", CONF_NOTIFY_TARGET: "notify.default"},
+    )
+    await hass.async_block_till_done()
+
+    job_id = await _print(hass_client_no_auth, "?name=Gast")
+    printer.job_attribute_sequences[job_id] = [(9, [])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    assert calls[-1]["entity_id"] == "notify.default"
+
+
+async def test_notify_by_name_without_default_falls_back_to_ha_notification_for_unknown_name(
+    hass: HomeAssistant, setup_integration: MockConfigEntry, printer: FakePrinter, hass_client_no_auth
+) -> None:
+    hass.config_entries.async_update_entry(setup_integration, options={CONF_NOTIFY_BY_NAME: "Florian: notify.florian"})
+    await hass.async_block_till_done()
+
+    job_id = await _print(hass_client_no_auth, "?name=Gast")
+    printer.job_attribute_sequences[job_id] = [(8, ["media-jam-error"])]
+    _advance(hass)
+    await hass.async_block_till_done()
+    notif = _notification(hass, setup_integration, job_id)
+    assert notif is not None and "Papierstau" in notif["message"]  # kein Push-Ziel, aber die übliche HA-Meldung
+
+
+async def test_options_flow_sets_notify_by_name(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"regenerate": False, "notify_by_name": "Florian: notify.florian\nDeborah: notify.deborah"}
+    )
+    await hass.async_block_till_done()
+    assert result["type"] == "create_entry"
+    assert setup_integration.options["notify_by_name"] == "Florian: notify.florian\nDeborah: notify.deborah"
+
+
+async def test_options_flow_without_notify_by_name_stores_none(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"regenerate": False})
+    await hass.async_block_till_done()
+    assert setup_integration.options["notify_by_name"] is None
